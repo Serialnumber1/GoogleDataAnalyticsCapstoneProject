@@ -1,0 +1,389 @@
+---
+title: "GDataAnalysisCapstoneProject"
+author: "Takeo Kushi"
+date: "2026-02-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Google Introduction to Data Analytics Capstone Project: Cyclistic Bike Share
+
+##### **Executive Summary**
+The below analysis looks at 12 months of ridership data (~5M rides) from Cyclistic Bike Share in order to extract insights to generate recommendations for marketing campaigns aimed at converting casual riders into annual membership plans. Results show key differences between the two rider types, with annual members showing greater commuter-type behavior and casual riders showing more leisure behavior, with longer rides and greater usage on weekends. This suggests developing marketing strategies aimed around converting casual users who display commuter type behaviors and price education for power users. 
+
+### Phase 1
+Cyclistic Bike-Share is a successful bike-sharing program that has completed its initial marketing stage of building awareness. For the next business phase, Cyclistic has identified that riders who have signed up for annual memberships are more profitable than casual riders. 
+
+#### **Marketing Goal**: 
+Design marketing strategies aimed at converting casual riders into annual members. 
+
+#### **Business Task:** 
+We will analyze the last 12 months of rider data to answer this question, identifying behavioral trends and patterns to generate insights and recommendations to create a marketing program for casual riders.
+
+**Ask**: How do annual members and casual riders use Cyclistic bikes differently?
+
+**Defining riders**:  
+**Casual:** Riders who buy single-ride or full-day passes. <br>
+**Cyclistic Members**: Purchasers of Annual Memberships. 
+
+To support this effort we will analyze the behavior of these two different classes of riders. 
+
+**Data Source:** The data has been made available by Motivate International Inc. under this [license](https://divvybikes.com/data-license-agreement.) 
+
+### Phase 2
+#### Data Preparation
+
+Data is downloaded from its original source, made available [here](https://divvy-tripdata.s3.amazonaws.com/index.html)
+We will be analyzing the last full calendar year's worth of data for 2025. This data was made available in CSV format stored as Zip files and then downloaded locally to a computer for processing. 
+
+```{r}
+# loading R packages
+library(tidyverse)
+```
+
+Loading the Data:
+
+```{r}
+library(readr)
+library(here)
+
+dir.create(here("data", "raw"), recursive = TRUE, showWarnings = FALSE)
+
+for (m in sprintf("%02d", 1:12)) {
+
+  url <- paste0(
+    "https://divvy-tripdata.s3.amazonaws.com/",
+    "2025", m, "-divvy-tripdata.zip"
+  )
+
+  dest <- here("data", "raw",
+               paste0("2025", m, "-divvy-tripdata.zip"))
+
+  download.file(url, destfile = dest, mode = "wb")
+}
+
+if (!file.exists(dest)) {
+  download.file(url, destfile = dest, mode = "wb")
+}
+
+library(here)
+# Data directory
+divvydatafolder <- here("data","raw")
+
+# Unzip files if needed
+zip_files <- list.files(divvydatafolder,
+                        pattern="\\.zip$",
+                        full.names=TRUE)
+
+lapply(zip_files, unzip, exdir = divvydatafolder)
+
+# Load CSV files
+divvy2025files <- list.files(
+  divvydatafolder,
+  pattern="\\.csv$",
+  full.names=TRUE
+)
+
+glimpse(divvy2025files)
+```
+
+Combining the Data into a single table: 
+```{r}
+# Combine all files into a single data frame
+divvy_2025 <- map_df(divvy2025files, read_csv)
+# Check the length
+glimpse(divvy_2025)
+```
+
+#### Data Cleaning
+
+*Cleaning  Actions:*
+* Removing any duplicated Rides by Ride ID
+* Removing rows with null values in key columns
+* Removing any rides that started in 2024 to have clean date data
+
+*Data Transformations*
+* Converted date/time data from rides into separate values for analysis
+
+
+Remove duplicate rides and any columns not needed:
+```{r}
+library(tidyr)
+#Check for duplicate Ride IDs
+sum(duplicated(divvy_2025$ride_id))
+
+#remove duplicate IDs
+divvy_2025 <- divvy_2025 %>%
+  distinct(ride_id, .keep_all = TRUE)
+
+#remove any null values from columns
+divvy_2025 <- divvy_2025 %>%
+  drop_na(
+    started_at,
+    ended_at,
+    member_casual,
+    ride_id
+  )
+
+#verify the new columns
+glimpse(divvy_2025)
+```
+
+Remove rides starting in 2024 and any rides with negative time values or values exceeding 24 hours for cleaner data:
+```{r}
+library(lubridate)
+# Filter for only 2025 years
+divvy_2025 <- divvy_2025 %>%
+  filter(year(started_at) == 2025)
+# Verify values
+unique(year(divvy_2025$started_at))
+
+divvy_2025 <- divvy_2025 %>%
+  mutate(
+    ride_minutes = as.numeric(difftime(ended_at, started_at, units = "mins"))
+  )
+
+divvy_2025 <- divvy_2025 %>%
+  filter(ride_minutes > 0,
+         ride_minutes < 1440)
+```
+
+Summary stastics on remaining data and columns:
+```{r}
+summary(divvy_2025)
+```
+
+Extract Ride 
+```{r}
+# Extract Ride Length from Data and convert format
+divvy_2025 <- divvy_2025 %>%
+  mutate(
+    ride_seconds = as.numeric(ended_at - started_at),
+
+    ride_length = sprintf(
+      "%02d:%02d:%02d",
+      as.integer(ride_seconds %/% 3600),
+      as.integer((ride_seconds %% 3600) %/% 60),
+      as.integer(ride_seconds %% 60)
+    )
+  )
+
+divvy_2025 <- divvy_2025 %>%
+  mutate(
+    ride_minutes = as.numeric(difftime(ended_at, started_at, units = "mins"))
+  )
+
+divvy_2025 <- divvy_2025 %>%
+  mutate(ride_minutes = ride_seconds / 60)
+
+# clean up any rides with negative values or over 24 hours
+divvy_2025 <- divvy_2025 %>%
+  filter(ride_minutes > 0, ride_minutes < 1440)
+
+# Extract Date Information
+divvy_2025 <- divvy_2025 %>%
+  mutate(
+    date = as.Date(started_at),
+    year = year(started_at),
+    month = month(started_at, label = TRUE),
+    day = day(started_at)
+  )
+# Extract day of week
+divvy_2025 <- divvy_2025 %>%
+  mutate(
+    day_of_week = wday(started_at, label = TRUE)
+  )
+
+# Extract hour of day
+divvy_2025 <- divvy_2025 %>%
+  mutate(
+    hour = hour(started_at)
+  )
+# Separate Weekends out
+divvy_2025 <- divvy_2025 %>%
+  mutate(
+    is_weekend = day_of_week %in% c("Sat", "Sun")
+  )
+# Weekday Order
+divvy_2025$day_of_week <- factor(
+  divvy_2025$day_of_week,
+  levels = c ("Mon", "Tue","Wed","Thu","Fri","Sat","Sun")
+)
+#verify changes
+glimpse(divvy_2025)
+
+```
+
+
+
+
+## Phase 3: Data Analysis and Visualizations
+To answer the question, "how do the rider types, casual and member, differ in ridership?" we want to explore what ride behavior looks like for the two different categories of Riders. 
+
+One initial and obvious place to look is how ridership differs by day of week. We might assume that annual members may take more rides during the weekdays as a regular part of their commute and as a corollary elevated ridership from casual riders on the weekends. This might help form the basis of a marketing strategy directed towards weekends.
+
+```{r}
+library(scales)
+
+# Create Bar chart of rides during the week
+divvy_2025 %>%
+  ggplot(aes(x = day_of_week, fill = member_casual)) +
+  geom_bar(position = "dodge") +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Number of Rides by Day of Week", 
+    x = "Day of Week",
+    y = "Number of Rides",
+    fill = "Rider Type"
+  )
+
+# check numeric values of rides
+divvy_2025 %>%
+  group_by(member_casual) %>%
+  summarise(
+    rides = n(),
+    avg_minutes = round(mean(ride_minutes)),
+    weekend_pct = round(mean(is_weekend)*100)
+  )
+
+
+divvy_2025 %>%
+  summarise(
+    weekend_rides = sum(is_weekend, na.rm = TRUE),
+    weekday_rides = sum(!is_weekend, na.rm = TRUE)
+  )
+```
+
+Another distinct difference between users would be length of rides. We might assume that members take longer rides. 
+
+Looking at how the proportion of riders changes by day: 
+
+```{r}
+library(scales)
+library(dplyr)
+
+
+# Add rides by day value
+rides_by_day <- divvy_2025 %>%
+  count(day_of_week, member_casual) %>%
+  group_by(day_of_week) %>%
+  mutate(prop = n / sum(n))
+
+# Create chart showing rider type breakout by day 
+ggplot(rides_by_day,
+       aes(x = day_of_week,
+           y = prop,
+           fill = member_casual)) +
+
+  geom_col() +
+
+  geom_text(
+    aes(label = percent(prop, accuracy = 1)),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    size = 4
+  ) +
+
+  scale_y_continuous(labels = percent_format()) +
+
+  labs(
+    title = "Rider Type Breakout by Day of Week",
+    x = "Day of Week",
+    y = "Distribution",
+    fill = "Rider Type"
+  ) +
+
+  theme_minimal()
+```
+
+
+
+
+```{r}
+divvy_2025 %>%
+  ggplot(aes(ride_minutes, fill = member_casual)) +
+  geom_histogram(binwidth = 5, alpha = 0.6, position = "identity") + 
+  coord_cartesian(xlim = c(0, 60)) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Distribution of Ride Lengths",
+    x = "Ride Length (in Minutes)", 
+    y = "Count"
+  )
+```
+In this case, the majority of rides appear to be under 20 minutes. With considerably higher counts for members this more or less falls within expectations. Curiously, at the extreme ends casual riders appear to outnumber member riders, perhaps as a result of casual riders using the bikes for leisure rides. 
+
+```{r}
+divvy_2025 %>%
+  group_by(member_casual) %>%
+  summarise(avg_ride = mean(ride_minutes, na.rm = TRUE)) %>%
+  ggplot(aes(member_casual, avg_ride, fill = member_casual)) +
+  geom_col() +
+  labs(
+    title = "Average Ride Length by Rider Type",
+    x = "Rider Type", 
+    y = "Average Ride Length (Mins)"
+  )
+```
+
+Average length of rides: this trend appears to be confirmed when looking at the average length of rides broken out by rider type. Casual riders use bikes for much longer than members. Is there any insight into this trend that can be gained from looking at the time of day that these rides occur?
+
+```{r}
+
+# Create chart of rides by hour of day
+divvy_2025 %>%
+  ggplot(aes(hour, fill = member_casual)) + 
+  geom_bar(position = "dodge") +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Rides by Hour of Day", 
+    x = "Hour",
+    y = "Number of Rides"
+  )
+```
+
+One key difference stands out between the two rider types when looking at time of day: full members see two peaks in ridership while casual members only see one. The peaks coincide with commuter hours, with the first peak occuring at around 8am in the morning and the second occuring at 5pm. This could potentially suggest an marketing angle aimed at highlighting the benefits of using Cyclistic for your daily commute. 
+
+```{r}
+
+# Create chart of rides by month, broken out by member type
+divvy_2025 %>%
+  ggplot(aes(month, fill = member_casual)) +
+  geom_bar(position = "dodge") +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Rides by Month", 
+    x = "Month",
+    y = "Number of Rides"
+  )
+
+```
+
+Rides by month show similar seasonal patterns between both rider types, with the warmer summer months seeing peak ridership. This suggests that a marketing campaign timed around the springtime and going into early summer could be a potent time to advertise the benefits of annual memberships. 
+
+
+## Phase 4: Summary and Recommendations 
+There are both similarities and key differences in the two different rider types for Cyclistic and both suggest avenues for advertising annual memberships. 
+
+**Similarities:** 
+Ridership peaks during summer months, evening commuting hours, and there are general similarities in the distribution of ride lengths
+
+**Differences:** 
+Casual riders tend to take longer rides and increase their ridership on weekends
+
+### Recommendations: 
+5 Suggestions for marketing campaigns: 
+
+1. Create a marketing campaign to run from April - July, preempting the busier season before rides increase for casual riders.
+
+2. Compare the costs for casual riders compared to an annual membership, highlighting the number of rides it takes to reach the costs of an annual membership. 
+
+3. For casual members opening the Cyclistic App to rent a bike during afternoon commute hours, add a marketing messsage highlighting the benefits of an annual membership for commuters. 
+
+4. Market to more frequent casual riders, e.g. those who reach a minimum of 3-5 rides per month or 30-day period.
+
+5. As casual users tend to increase their ridership on the weekends, create a separate annual membership tier just for weekends, to create an additional product and entry point into more dedicated membership.
+
